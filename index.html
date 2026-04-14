@@ -36,6 +36,17 @@
         let camera = { x: 0, y: 0 };
         let scale = 1.0; // Текущий масштаб
         let cars = [];
+        let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    
+    // Если пришли из магазина — сразу показываем окно!
+    if (new URLSearchParams(window.location.search).get('install') === 'true') {
+        if (deferredPrompt) deferredPrompt.prompt();
+    }
+});
+        
 
         // Регистрация SW
         if ('serviceWorker' in navigator) {
