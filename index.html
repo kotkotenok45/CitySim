@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Fixed Infinite Traffic AI</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#070707">
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #070707; font-family: -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
+        canvas { display: block; touch-action: none; }
+        #ui { position: absolute; top: env(safe-area-inset-top, 20px); left: 20px; color: #eee; pointer-events: none; background: rgba(0,0,0,0.5); padding: 12px; border-radius: 10px; backdrop-filter: blur(5px); box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        #ui b { font-size: 1.1em; letter-spacing: -0.5px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <b>Infinite Traffic AI</b><br>
+        Тяни: перемещение. Зум: колесо/pinch.
+    </div>
+    <canvas id="simCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const GRID_SIZE = 400; // Размер одного квартала
+        const INTERSECTION_SAFE_ZONE = 80; // Расстояние до центра перекрестка для остановки
+        
+        // Характеристики машин
+        const CAR_WIDTH = 22, CAR_LENGTH = 44, MAX_SPEED = 4.2, ACCEL = 0.15, BRAKE_FORCE = 0.4;
+        const SENSOR_DIST = 100;
+
+        let width, height;
+        let camera = { x: 0, y: 0 };
+        let scale = 1.0; // Текущий масштаб
+        let cars = [];
+
+        // Регистрация SW
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(() => {});
+        }
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function seededRandom(x, y) {
+            const seed = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+            return seed - Math.floor(seed);
+        }
+
+        class Car {
+            constructor(col, row, lane) {
+                this.col = col;
+                this.row = row;
+                this.lane = lane; // 0:вниз, 1:влево, 2:вверх, 3:вправо
+                this.color = `hsl(${seededRandom(col, row + lane) * 360}, 65%, 55%)`;
+                this.speed = 2.5 + seededRandom(col, row) * 1.5;
+                this.angle = [Math.PI/2, Math.PI, -Math.PI/2, 0][lane];
+                this.braking = false;
+                
+                const offset = 30; // Смещение в свою полосу
+                // Старт четко на границе квартала
+                this.localX = [200 - offset, 400, 200 + offset, 0][lane];
+                this.localY = [0, 200 - offset, 400, 200 + offset][lane];
+            }
+
+            update(all, trafficPhase) {
+                let min_d = Infinity;
+                let obstacle = null;
+
+                const globalX = this.col * GRID_SIZE + this.localX;
+                const globalY = this.row * GRID_SIZE + this.localY;
+
+                // --- 1. ПРОВЕРКА МАШИН ВПЕРЕДИ ---
+                all.forEach(other => {
+                    if(other === this) return;
+                    // Вычисляем глобальные координаты другой машины для точного замера
+                    const oX = other.col * GRID_SIZE + other.localX;
+                    const oY = other.row * GRID_SIZE + other.localY;
+                    
+                    const dx = oX - globalX;
+                    const dy = oY - globalY;
+                    const d = Math.hypot(dx, dy);
+
+                    // Проверяем, едет ли она в той же полосе и в ту же сторону (dot-product)
+                    const dot = (dx * Math.cos(this.angle) + (dy * Math.sin(this.angle))) / d;
+                    // Если до препятствия меньше SENSOR_DIST и оно впереди (dot > 0.8)
+                    if(d < SENSOR_DIST && dot > 0.8) {
+                        if(d < min_d) { min_d = d; obstacle = other; }
+                    }
+                });
+
+                // --- 2. ЛОГИКА ПЕРЕКРЕСТКА ---
+                // "Виртуальный светофор"
+                const centerX = GRID_SIZE / 2;
+                const centerY = GRID_SIZE / 2;
+                // Расстояние до центра квартала по оси движения
+                const distToCenter = [this.localY, 400-this.localX, 400-this.localY, this.localX][this.lane];
+                
+                // Проверяем: мы в зоне перед перекрестком (например, от 80 до 120px до центра)?
+                const inSafeZone = distToCenter > (centerX - INTERSECTION_SAFE_ZONE) && distToCenter < centerX;
+                
+                // 0 и 2 фаза (Вертикальные), 1 и 3 фаза (Горизонтальные)
+                const myDirectionIsVertical = (this.lane === 0 || this.lane === 2);
+                const canGoIntersection = myDirectionIsVertical ? (trafficPhase % 2 === 0) : (trafficPhase % 2 === 1);
+
+                // --- 3. ПРИНЯТИЕ РЕШЕНИЯ (ГАЗ/ТОРМОЗ) ---
+                if(obstacle) {
+                    // Есть машина прямо перед нами
+                    this.braking = true;
+                    this.speed = Math.max(0, this.speed - BRAKE_FORCE);
+                } else if (inSafeZone && !canGoIntersection) {
+                    // Светофор красный
+                    this.braking = true;
+                    // Плавно останавливаемся перед перекрестком
+                    this.speed = Math.max(0, this.speed - BRAKE_FORCE * 1.5);
+                } else {
+                    // Путь свободен / Светофор зеленый
+                    this.braking = false;
+                    this.speed = Math.min(MAX_SPEED, this.speed + ACCEL);
+                }
+
+                // --- 4. ДВИЖЕНИЕ И ПЕРЕХОДЫ ---
+                this.localX += Math.cos(this.angle) * this.speed;
+                this.localY += Math.sin(this.angle) * this.speed;
+
+                // Бесконечный переход между кварталами
+                if(this.localX >= GRID_SIZE) { this.localX = 0; this.col++; }
+                if(this.localX < 0) { this.localX = GRID_SIZE; this.col--; }
+                if(this.localY >= GRID_SIZE) { this.localY = 0; this.row++; }
+                if(this.localY < 0) { this.localY = GRID_SIZE; this.row--; }
+            }
+
+            draw() {
+                // Преобразуем глобальные координаты в экранные С УЧЕТОМ ЗУМА
+                const screenX = (this.col * GRID_SIZE + this.localX - camera.x) * scale;
+                const screenY = (this.row * GRID_SIZE + this.localY - camera.y) * scale;
+
+                const cLen = CAR_LENGTH * scale;
+                const cWid = CAR_WIDTH * scale;
+
+                // Проверка видимости с учетом масштаба
+                if (screenX < -cLen || screenX > width + cLen || screenY < -cLen || screenY > height + cLen) return;
+
+                ctx.save();
+                ctx.translate(screenX, screenY);
+                ctx.rotate(this.angle);
+                
+                // Свет фар (тоже масштабируем)
+                const g = ctx.createLinearGradient(cLen/2, 0, SENSOR_DIST * scale, 0);
+                g.addColorStop(0, 'rgba(255,255,220,0.15)'); g.addColorStop(1, 'transparent');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cLen/2, -cWid/2.5); ctx.lineTo(cLen*2.3, -cWid*1.5); ctx.lineTo(cLen*2.3, cWid*1.5); ctx.lineTo(cLen/2, cWid/2.5); ctx.fill();
+                
+                // Корпус
+                ctx.fillStyle = this.color; ctx.fillRect(-cLen/2, -cWid/2, cLen, cWid);
+                ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(-cLen/6, -cWid/2, cLen/3, cWid); // Крыша
+                
+                // Стопы
+                ctx.fillStyle = this.braking ? '#ff3300' : '#771100';
+                const sSz = 2.5 * scale;
+                ctx.fillRect(-cLen/2, -cWid/2, sSz*1.2, sSz); ctx.fillRect(-cLen/2, cWid/2-sSz, sSz*1.2, sSz);
+                
+                if(this.braking) { 
+                    ctx.shadowBlur = 10 * scale; ctx.shadowColor = '#f00'; ctx.fillRect(-cLen/2, -cWid/2, 1*scale, cWid);
+                }
+                
+                ctx.restore();
+            }
+        }
+
+        function drawScene() {
+            ctx.fillStyle = '#0f0f0f';
+            ctx.fillRect(0, 0, width, height);
+
+            // Границы видимости в мировых координатах (с учетом зума)
+            const worldW = width / scale;
+            const worldH = height / scale;
+            const startCol = Math.floor(camera.x / GRID_SIZE);
+            const endCol = Math.ceil((camera.x + worldW) / GRID_SIZE);
+            const startRow = Math.floor(camera.y / GRID_SIZE);
+            const endRow = Math.ceil((camera.y + worldH) / GRID_SIZE);
+
+            // "Глобальная фаза" трафика для всех кварталов (меняется раз в 5 сек)
+            const trafficPhase = Math.floor(Date.now() / 5000) % 4; 
+
+            for (let col = startCol; col <= endCol; col++) {
+                for (let row = startRow; row <= endRow; row++) {
+                    const x = (col * GRID_SIZE - camera.x) * scale;
+                    const y = (row * GRID_SIZE - camera.y) * scale;
+                    const sGrid = GRID_SIZE * scale;
+
+                    // Дороги
+                    ctx.fillStyle = '#1c1c1c';
+                    const sRoad = 140 * scale; // Ширина дороги
+                    ctx.fillRect(x + (sGrid-sRoad)/2, y, sRoad, sGrid); // Вертикальная
+                    ctx.fillRect(x, y + (sGrid-sRoad)/2, sGrid, sRoad); // Горизонтальная
+
+                    // Здания
+                    const rand = seededRandom(col, row);
+                    ctx.fillStyle = '#151515';
+                    if (rand > 0.4) {
+                        const padd = 20 * scale;
+                        const sBuild = (GRID_SIZE/2 - 20) * scale; // Размер здания
+                        if(seededRandom(col, row+1) > 0.5) ctx.fillRect(x+padd, y+padd, sBuild, sBuild); // Топ-лев
+                        if(seededRandom(col+1, row) > 0.5) ctx.fillRect(x+sGrid-sBuild-padd, y+sGrid-sBuild-padd, sBuild, sBuild); // Бот-райт
+                    }
+
+                    // Освещение (твои фонари)
+                    const lightOff = 130 * scale; // Смещение фонаря от угла
+                    const lights = [[lightOff, lightOff], [sGrid-lightOff, lightOff], [lightOff, sGrid-lightOff], [sGrid-lightOff, sGrid-lightOff]];
+                    lights.forEach(p => {
+                        const lx = x + p[0], ly = y + p[1];
+                        const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 90*scale);
+                        g.addColorStop(0, 'rgba(255, 190, 110, 0.08)'); g.addColorStop(1, 'transparent');
+                        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(lx, ly, 90*scale, 0, Math.PI*2); ctx.fill();
+                        ctx.fillStyle = '#ffe0aa'; ctx.beginPath(); ctx.arc(lx, ly, 2*scale, 0, Math.PI*2); ctx.fill();
+                    });
+
+                    // --- 5. СПАВН ТОЛЬКО ЗА КАДРОМ ---
+                    // Спавним, если квартал находится justo fuera (на одну клетку) видимости
+                    const isOutsideVisible = (col === startCol - 1 || col === endCol || row === startRow - 1 || row === endRow);
+                    if (isOutsideVisible && Math.random() < 0.005 && cars.length < 150) {
+                        const lane = Math.floor(Math.random() * 4);
+                        // Простая проверка, чтобы не спавнить друг в друга
+                        const safeSpawn = !cars.some(c => c.col === col && c.row === row && c.lane === lane && Math.hypot(c.localX - GRID_SIZE/2, c.localY - GRID_SIZE/2) < 50);
+                        if(safeSpawn) cars.push(new Car(col, row, lane));
+                    }
+                }
+            }
+
+            // Обновляем и рисуем все машины
+            cars.forEach(c => { 
+                c.update(cars, trafficPhase); 
+                c.draw(); 
+            });
+        }
+
+        // --- 6. ИНПУТ (DRAG & ZOOM) ---
+        let isDragging = false, lastX, lastY, pinchDist = null;
+
+        const start = (x, y) => { isDragging = true; lastX = x; lastY = y; };
+        const move = (x, y) => { 
+            if(isDragging) { 
+                // Двигаем камеру с учетом зума
+                camera.x -= (x - lastX) / scale; 
+                camera.y -= (y - lastY) / scale; 
+                lastX = x; lastY = y; 
+            } 
+        };
+        const handleZoom = (delta, centerX, centerY) => {
+            const oldScale = scale;
+            scale = Math.max(0.3, Math.min(2.0, scale + delta)); // Ограничиваем зум
+
+            // Масштабируем "в точку", а не в угол
+            camera.x += (centerX / oldScale) - (centerX / scale);
+            camera.y += (centerY / oldScale) - (centerY / scale);
+        }
+
+        // Мышь
+        canvas.onmousedown = e => start(e.clientX, e.clientY);
+        window.onmousemove = e => move(e.clientX, e.clientY);
+        window.onmouseup = () => { isDragging = false; pinchDist = null; };
+        canvas.onwheel = e => { e.preventDefault(); handleZoom(-e.deltaY * 0.001, e.clientX, e.clientY); };
+
+        // Тач (Pinch & Pan)
+        canvas.ontouchstart = e => {
+            if (e.touches.length === 2) {
+                pinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            } else {
+                start(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        };
+        canvas.ontouchmove = e => {
+            if (e.touches.length === 2 && pinchDist) {
+                const newDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const midY = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                handleZoom((newDist - pinchDist) * 0.005, midX, midY);
+                pinchDist = newDist;
+            } else if (e.touches.length === 1) {
+                move(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        };
+        canvas.ontouchend = () => { isDragging = false; pinchDist = null; };
+
+        function loop() {
+            drawScene();
+            
+            // Удаляем машины, которые ОЧЕНЬ далеко от видимости (чтобы не ели память)
+            const cleanupDist = (width > height ? width : height) * 2;
+            cars = cars.filter(c => {
+                const screenX = (c.col * GRID_SIZE + c.localX - camera.x) * scale;
+                const screenY = (c.row * GRID_SIZE + c.localY - camera.y) * scale;
+                // Не используем hypot для скорости
+                return screenX > -cleanupDist && screenX < width + cleanupDist && screenY > -cleanupDist && screenY < height + cleanupDist;
+            });
+
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+  </html>
+  
