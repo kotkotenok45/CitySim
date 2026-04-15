@@ -14,6 +14,37 @@
     </style>
 </head>
 <body>
+    <div id="install-click-shield" style="
+    display: none; 
+    position: fixed; 
+    top: 0; 
+    left: 0; 
+    width: 100vw; 
+    height: 100vh; 
+    background: rgba(0, 0, 0, 0.7); 
+    z-index: 99999; 
+    cursor: pointer; 
+    align-items: center; 
+    justify-content: center; 
+    color: white; 
+    text-align: center;
+    backdrop-filter: blur(5px);
+">
+    <div style="font-family: sans-serif; padding: 20px;">
+        <h1 style="font-size: 24px; margin-bottom: 10px;">Почти готово!</h1>
+        <p style="font-size: 18px;">Нажми в любом месте экрана,<br>чтобы завершить установку приложения</p>
+        <div style="margin-top: 20px; font-size: 40px; animation: pulse 1.5s infinite;">👆</div>
+    </div>
+</div>
+
+<style>
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+</style>
+    
 
     <div id="ui">
         <b>Infinite Traffic AI</b><br>
@@ -37,30 +68,49 @@
         let scale = 1.0; // Текущий масштаб
         let cars = [];
 
-        let deferredPrompt;
 
-// 1. Ловим событие
+        let deferredPrompt;
+const shield = document.getElementById('install-click-shield');
+
+// 1. Регистрация Service Worker (обязательно!)
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+}
+
+// 2. Ждем сигнала от браузера, что PWA готово
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    console.log("CitySim готов к установке скриптом");
-
-    // 2. Проверяем, пришли ли мы из магазина
+    
+    // Проверяем, пришел ли пользователь из нашего Магазина
     const params = new URLSearchParams(window.location.search);
     if (params.get('install') === 'true') {
-        
-        // Вместо автоматического вызова, вешаем установку на ПЕРВЫЙ КЛИК по экрану
-        // Пользователь нажмет куда угодно (или на кнопку игры), и вылетит окно Chrome
-        document.body.addEventListener('click', () => {
-            if (deferredPrompt) {
-                deferredPrompt.prompt();
-                deferredPrompt = null;
-            }
-        }, { once: true }); // Сработает только один раз
-
-        // Можно вывести маленькую подсказку сверху (опционально)
-        console.log("Нажмите в любом месте для установки");
+        // Показываем элемент на весь экран
+        shield.style.display = 'flex';
     }
+});
+
+// 3. Обработка клика в ЛЮБОМ месте этого элемента
+shield.addEventListener('click', async () => {
+    if (deferredPrompt) {
+        // Вызываем системное окно установки
+        deferredPrompt.prompt();
+        
+        const { outcome } = await deferredPrompt.userChoice;
+        console.log('Результат установки:', outcome);
+        
+        // Убираем слой в любом случае
+        shield.style.display = 'none';
+        deferredPrompt = null;
+    } else {
+        // Если событие еще не долетело, просто закрываем слой через 2 сек или при повторном клике
+        shield.style.display = 'none';
+    }
+});
+
+// 4. Если установили — на всякий случай скрываем
+window.addEventListener('appinstalled', () => {
+    shield.style.display = 'none';
 });
         
         
