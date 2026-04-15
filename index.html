@@ -55,50 +55,58 @@
         let cars = [];
 
 
+
+        <script>
+    // Помещаем код в блок, который сработает после полной загрузки страницы
+    (function() {
         let deferredPrompt;
-const shield = document.getElementById('install-click-shield');
+        const shield = document.getElementById('install-shield');
 
-// 1. Регистрация Service Worker (обязательно!)
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js');
-}
+        // Регистрируем Service Worker (критично для PWA)
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
 
-// 2. Ждем сигнала от браузера, что PWA готово
-window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
+        // Слушаем событие готовности к установке
+        window.addEventListener('beforeinstallprompt', (e) => {
+            console.log("Браузер готов к установке");
+            e.preventDefault();
+            deferredPrompt = e;
+
+            // Проверяем, есть ли параметр ?install=true в ссылке
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('install') === 'true') {
+                // Показываем наш полноэкранный элемент
+                shield.style.display = 'flex';
+            }
+        });
+
+        // Клик в ЛЮБОМ месте экрана по нашему щиту
+        shield.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                // Вызываем системное окно установки Chrome
+                deferredPrompt.prompt();
+                
+                const { outcome } = await deferredPrompt.userChoice;
+                console.log('Выбор пользователя:', outcome);
+                
+                // Прячем щит
+                shield.style.display = 'none';
+                deferredPrompt = null;
+            } else {
+                // Если вдруг кликнули, а события нет - просто убираем слой
+                shield.style.display = 'none';
+            }
+        });
+
+        // Если установка прошла успешно - скрываем элемент
+        window.addEventListener('appinstalled', () => {
+            shield.style.display = 'none';
+            console.log('Приложение установлено');
+        });
+    })();
+</script>
     
-    // Проверяем, пришел ли пользователь из нашего Магазина
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('install') === 'true') {
-        // Показываем элемент на весь экран
-        shield.style.display = 'flex';
-    }
-});
-
-// 3. Обработка клика в ЛЮБОМ месте этого элемента
-shield.addEventListener('click', async () => {
-    if (deferredPrompt) {
-        // Вызываем системное окно установки
-        deferredPrompt.prompt();
-        
-        const { outcome } = await deferredPrompt.userChoice;
-        console.log('Результат установки:', outcome);
-        
-        // Убираем слой в любом случае
-        shield.style.display = 'none';
-        deferredPrompt = null;
-    } else {
-        // Если событие еще не долетело, просто закрываем слой через 2 сек или при повторном клике
-        shield.style.display = 'none';
-    }
-});
-
-// 4. Если установили — на всякий случай скрываем
-window.addEventListener('appinstalled', () => {
-    shield.style.display = 'none';
-});
-        
         
 
         // Регистрация SW
