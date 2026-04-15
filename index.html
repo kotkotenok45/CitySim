@@ -36,16 +36,33 @@
         let camera = { x: 0, y: 0 };
         let scale = 1.0; // Текущий масштаб
         let cars = [];
+
         let deferredPrompt;
+
+// 1. Ловим событие
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    
-    // Если пришли из магазина — сразу показываем окно!
-    if (new URLSearchParams(window.location.search).get('install') === 'true') {
-        if (deferredPrompt) deferredPrompt.prompt();
+    console.log("CitySim готов к установке скриптом");
+
+    // 2. Проверяем, пришли ли мы из магазина
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('install') === 'true') {
+        
+        // Вместо автоматического вызова, вешаем установку на ПЕРВЫЙ КЛИК по экрану
+        // Пользователь нажмет куда угодно (или на кнопку игры), и вылетит окно Chrome
+        document.body.addEventListener('click', () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt = null;
+            }
+        }, { once: true }); // Сработает только один раз
+
+        // Можно вывести маленькую подсказку сверху (опционально)
+        console.log("Нажмите в любом месте для установки");
     }
 });
+        
         
 
         // Регистрация SW
